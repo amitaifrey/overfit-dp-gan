@@ -65,7 +65,7 @@ categorical_transformer = Pipeline(steps=[('onehot', OneHotEncoder(handle_unknow
 numeric_transformer = Pipeline(steps=[('func', FunctionTransformer(lambda x: x))])
 
 numeric_features = []
-categorical_features = ["workclass", "education", "education-num", "marital-status", "occupation", "relationship", "race", "sex"]
+categorical_features = ["workclass", "marital-status", "occupation", "relationship", "race", "sex"]
 
 preprocessor = ColumnTransformer(
     transformers=[
@@ -81,6 +81,8 @@ train = train.drop("capital-loss",1)
 train = train.drop("age",1)
 train = train.drop("hours-per-week",1)
 train = train.drop("native-country",1)
+train = train.drop("education",1)
+train = train.drop("education-num",1)
 X_train = train[train.columns[:-1]]
 X_train = preprocessor.fit_transform(X_train).toarray().astype(int)
 y_train = train[train.columns[-1]]
@@ -93,13 +95,15 @@ test = test.drop("capital-loss",1)
 test = test.drop("age",1)
 test = test.drop("hours-per-week",1)
 test = test.drop("native-country",1)
+test = test.drop("education",1)
+test = test.drop("education-num",1)
 X_test = test[test.columns[:-1]]
 X_test = preprocessor.fit_transform(X_test).toarray().astype(int)
 y_test = test[test.columns[-1]]
 y_test = LabelEncoder().fit_transform(y_test)
 
 classifier = Sequential()
-classifier.add(Dense(24, activation = 'relu', input_dim = 73))
+classifier.add(Dense(24, activation = 'relu', input_dim = 41))
 classifier.add(Dense(12, activation = 'relu'))
 classifier.add(Dense(6, activation = 'relu'))
 classifier.add(Dense(1, activation = 'sigmoid'))
@@ -124,9 +128,11 @@ train = train.drop("capital-loss",1)
 train = train.drop("age",1)
 train = train.drop("hours-per-week",1)
 train = train.drop("native-country",1)
+train = train.drop("education",1)
+train = train.drop("education-num",1)
 
 train.replace(["Private", "Self-emp-not-inc", "Self-emp-inc", "Federal-gov", "Local-gov", "State-gov", "Without-pay", "Never-worked"], [1,2,3,4,5,6,7,8], inplace=True, regex=True)
-train.replace(["Bachelors", "Some-college", "11th", "HS-grad", "Prof-school", "Assoc-acdm", "Assoc-voc", "9th", "7th-8th", "12th", "Masters", "1st-4th", "10th", "Doctorate", "5th-6th", "Preschool"], [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16], inplace=True, regex=True)
+#train.replace(["Bachelors", "Some-college", "11th", "HS-grad", "Prof-school", "Assoc-acdm", "Assoc-voc", "9th", "7th-8th", "12th", "Masters", "1st-4th", "10th", "Doctorate", "5th-6th", "Preschool"], [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16], inplace=True, regex=True)
 train.replace(["Married-civ-spouse", "Divorced", "Never-married", "Separated", "Widowed", "Married-spouse-absent", "Married-AF-spouse"], [1,2,3,4,5,6,7], inplace=True, regex=True)
 train.replace(["Tech-support", "Craft-repair", "Other-service", "Sales", "Exec-managerial", "Prof-specialty", "Handlers-cleaners", "Machine-op-inspct", "Adm-clerical", "Farming-fishing", "Transport-moving", "Priv-house-serv", "Protective-serv", "Armed-Forces"], [1,2,3,4,5,6,7,8,9,10,11,12,13,14], inplace=True, regex=True)
 train.replace(["Wife", "Own-child", "Husband", "Not-in-family", "Other-relative", "Unmarried"], [1,2,3,4,5,6], inplace=True, regex=True)
@@ -137,12 +143,12 @@ train.replace(["Female", "Male"], [1,2], inplace=True, regex=True)
 X_train = train[train.columns[:-1]]
 y_train = train[train.columns[-1]]
 y_train = LabelEncoder().fit_transform(y_train)
-bins = [[i for i in range(1,9)], [i for i in range(1,18)], [i for i in range(1,18)], [i for i in range(1,9)], [i for i in range(1,16)], [i for i in range(1,8)], [i for i in range(1,7)], [i for i in range(1,4)]]
+bins = [[i for i in range(1,9)], [i for i in range(1,9)], [i for i in range(1,16)], [i for i in range(1,8)], [i for i in range(1,7)], [i for i in range(1,4)]]
 B, _ = np.histogramdd(X_train.to_numpy(), bins)
 
 B = B.flatten()
 D = B.shape
-Q = np.array([random_queries(D) for i in range(50)])
+Q = np.array([random_queries(D) for i in range(200)])
 T = 100
 eps = 0.2
 
