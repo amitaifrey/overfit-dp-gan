@@ -13,6 +13,7 @@ from sklearn.neighbors import KNeighborsClassifier
 import os
 import numba
 from numba import jit, prange
+import random
 
 # Generate random coefficients in [-1,1] for a linear query, where a third of them are expected to be 0.
 # This was done to simulate a linear query that will probably not reach counting over 70% of the dataset.
@@ -30,18 +31,25 @@ def mult_weights(A, q, diff, size):
     for i in prange(len(A)):
         # Notice we can simply multiply q[i]*A[i] because the rest of x (the record) is 0 so no need to multiply it at all
         A[i] *= np.exp(q[i] * A[i] * diff / (2.0 * size)) 
-    return A * size / np.sum(A)
+    return A / np.sum(A)
 
 @numba.jit(cache=True, nopython=True, parallel=True)
 def calc_scores(Q, A, B, eps):
     scores = np.zeros(len(Q))
     for i in prange(len(Q)):
-        scores[i] = np.exp(eps * np.abs(run(Q[i], A) - run(Q[i], B)) / 2.0)
-    return scores / np.linalg.norm(scores, ord=1)
+        diff = np.abs(run(Q[i], A) - run(Q[i], B))
+        scores[i] = np.exp(eps * diff / 2.0)
+    return scores / np.sum(scores)
 
-def better_mwem(B, D, Q, T, eps, part_avg=0):
+def better_mwem(B, D, Q, T, eps, part_avg=0, starting_hist=None):
     # initialize A
-    A = [np.full(B.shape, np.sum(B) / B.size)]
+    B = B / np.sum(B)
+    if starting_hist is None:
+        A = [np.full(B.shape, np.sum(B) / B.size)]
+    else:
+        A = starting_hist / np.sum(starting_hist)
+        A = A.flatten()
+        A = [A]
 
     for i in range(1, T+1):
         if i % 10 == 0:
@@ -55,12 +63,19 @@ def better_mwem(B, D, Q, T, eps, part_avg=0):
         
         # run it
         actual = run(q, B)
-        noisy = actual + np.random.laplace(0, 1/curr_eps)
+        noise = np.random.laplace(0, 1/curr_eps)
+        noisy = actual + noise
 
         # update weights
         A_i = A[i-1]
         old = run(q, A_i)
-        A_i = mult_weights(A_i, q, noisy - old, np.sum(B))
+        diff = noisy - old
+        print(diff, noise, 1/curr_eps, np.max(A_i), np.min(A_i), np.sum(A_i))
+        if np.max(A_i) >= 0.01:
+            break
+        # if np.abs(diff) > 1000:
+        #     diff = 1000 * np.sign(diff)
+        A_i = mult_weights(A_i, q, diff, 1.0)
         A.append(A_i)
     return np.average(A[int(len(A)*part_avg):], axis=0)
 
@@ -101,33 +116,38 @@ def process_data(file):
 
     return data
 
+# def split_and_categorize(data):
+#     categorical_transformer = Pipeline(steps=[('onehot', OneHotEncoder(handle_unknown='ignore'))])
+#     numeric_transformer = Pipeline(steps=[('func', FunctionTransformer(lambda x: x))])
+
+#     numeric_features = []
+#     categorical_features = ["workclass", "marital-status", "occupation", "relationship", "race", "sex"]
+
+#     preprocessor = ColumnTransformer(
+#         transformers=[
+#             ('num', numeric_transformer, numeric_features),
+#             ('cat', categorical_transformer, categorical_features)
+#         ]
+#     )
+
+#     X = data[data.columns[:-1]]
+#     y = data[data.columns[-1]]
+
+#     return preprocessor.fit_transform(X).toarray().astype(int), LabelEncoder().fit_transform(y)
+
 def split_and_categorize(data):
-    categorical_transformer = Pipeline(steps=[('onehot', OneHotEncoder(handle_unknown='ignore'))])
-    numeric_transformer = Pipeline(steps=[('func', FunctionTransformer(lambda x: x))])
-
-    numeric_features = []
-    categorical_features = ["workclass", "marital-status", "occupation", "relationship", "race", "sex"]
-
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ('num', numeric_transformer, numeric_features),
-            ('cat', categorical_transformer, categorical_features)
-        ]
-    )
-
-    X = data[data.columns[:-1]]
-    y = data[data.columns[-1]]
-
-    return preprocessor.fit_transform(X).toarray().astype(int), LabelEncoder().fit_transform(y)
+    X = data.T[:-1]
+    y = data.T[-1]
+    return X.T, y.T
 
 def run_ann(train_data, test_data, epochs=50):
     X_train, y_train = split_and_categorize(train_data)
     X_test, y_test = split_and_categorize(test_data)
 
     classifier = Sequential()
-    classifier.add(Dense(24, activation = 'relu', input_dim = 41))
-    classifier.add(Dense(12, activation = 'relu'))
-    classifier.add(Dense(6, activation = 'relu'))
+    classifier.add(Dense(200, activation = 'relu', input_dim = 999))
+    classifier.add(Dense(50, activation = 'relu'))
+    classifier.add(Dense(10, activation = 'relu'))
     classifier.add(Dense(1, activation = 'sigmoid'))
     classifier.compile(optimizer = 'adam', loss = 'binary_crossentropy', metrics = ['accuracy'])
     classifier.fit(X_train, y_train, validation_data=(X_test, y_test), batch_size = 10, epochs = epochs, shuffle=True)
@@ -151,26 +171,26 @@ def run_knn(train_data, test_data):
     X_train, y_train = split_and_categorize(train_data)
     X_test, y_test = split_and_categorize(test_data)
 
-    knn_clf = KNeighborsClassifier(2)
+    knn_clf = KNeighborsClassifier(10)
     knn_clf.fit(X_train, y_train)
     y_pred = knn_clf.predict(X_test)
     knn_cm = confusion_matrix(y_test, y_pred)
     return knn_cm
 
-def run_mwem(train_data, T, eps, q_len):
+def run_mwem(train_data, T, eps, q_len, starting_hist=None):
     bins = [[i for i in range(1,9)], [i for i in range(1,9)], [i for i in range(1,16)], [i for i in range(1,8)], [i for i in range(1,7)], [i for i in range(1,4)], [i for i in range(1,4)]]
     B, _ = np.histogramdd(train_data.to_numpy(), bins)
     B = B.flatten()
     D = B.shape
     Q = np.array([random_queries(D) for i in range(q_len)])
 
-    A = better_mwem(B, D, Q, T, eps, part_avg=0.5)
+    A = better_mwem(B, D, Q, T, eps, part_avg=0.5, starting_hist=starting_hist)
     print(max(A), min(A), min(A) / max(A))
     errors = [np.abs(run(q, B) - run(q, A)) / 30161 for q in Q]
     print(max(errors), np.mean(errors))
 
     A /= sum(A)
-    syn_train = sample_syn_data(A, 50000)
+    syn_train = np.array(random.choices(np.arange(0, len(A)), weights=A, k=100000))
 
     headers = train_data.columns.to_list()
     bins.reverse()
@@ -185,41 +205,92 @@ def run_mwem(train_data, T, eps, q_len):
     X_syn["income"] = X_syn["income"] - 1
     return X_syn
 
-train_data = process_data("adult_data_clean.csv")
-test_data = process_data("adult_test_clean.csv")
 
-train_data = train_data[train_data.columns[0:10]]
-test_data = test_data[test_data.columns[0:10]]
+def sample(sample_size, low_dim, high_dim, mapping, class_vec):
+    sample_low = np.random.choice([0, 1], (sample_size, low_dim-1))
+    sample = np.zeros((sample_size, high_dim))
+    for i in range(sample_size):
+        sample[i][mapping] = sample_low[i]
+        sample[i][high_dim-1] = np.sum(np.bitwise_xor(sample[i][mapping].astype(int), class_vec)) % 2
+    return sample
+
+def plot_tsne(data):
+    embedding_1 = TSNE(n_components=2, perplexity=5.0, early_exaggeration=1.0).fit_transform(data[:500])
+    x,y = embedding_1.T
+
+    plt.rcParams["figure.figsize"] = (15,15)
+    plt.scatter(x,y,c=['blue' if data[i][-1] == 0 else 'red' for i in range(500)])
+    plt.title('TSNE Plot, Real Data vs. Synthetic')
+    plt.show()
+
+
+high_dim = 1000
+low_dim = 20
+train_size = 5000
+test_size = 1000
+
+mapping = np.random.choice(np.arange(high_dim), low_dim-1)
+class_vec = np.random.choice([0,1], low_dim-1)
+train_data = sample(train_size, low_dim, high_dim, mapping, class_vec)
+test_data = sample(test_size, low_dim, high_dim, mapping, class_vec)
+plot_tsne(train)
+
+# train_data = process_data("adult_data_clean.csv")
+# test_data = process_data("adult_test_clean.csv")
+
+# train_data = train_data[train_data.columns[0:10]]
+# test_data = test_data[test_data.columns[0:10]]
 
 
 ann_cm = run_ann(train_data, test_data)
 dt_cm = run_dt(train_data, test_data)
 print((dt_cm[0][0] + dt_cm[1][1]) / np.sum(dt_cm))
 knn_cm = run_knn(train_data, test_data)
+print(knn_cm)
 print((knn_cm[0][0] + knn_cm[1][1]) / np.sum(knn_cm))
 
-syn_data = run_mwem(pd.concat([train_data, test_data]), 30, 0.1, 5000)
+gan = PytorchDPSynthesizer(3.0, PATECTGAN(regularization='dragan'), None)
+gan.fit(train_data, categorical_columns=train_data.columns.to_list())
+gan_syn = gan.sample(10000)
 
-dt_syn_cm = run_dt(syn_data, test_data)
+mwem_syn = run_mwem(train_data, 100, 2, 1000, starting_hist=hist)
+
+dt_syn_cm = run_dt(mwem_syn, test_data)
 print((dt_syn_cm[0][0] + dt_syn_cm[1][1]) / np.sum(dt_syn_cm))
 
-knn_syn_cm = run_knn(syn_data, test_data)
+knn_syn_cm = run_knn(mwem_syn, test_data)
+print(knn_syn_cm)
 print((knn_syn_cm[0][0] + knn_syn_cm[1][1]) / np.sum(knn_syn_cm))
 
-ann_syn_cm = run_ann(syn_data, test_data, epochs=200)
+ann_syn_cm = run_ann(mwem_syn, test_data, epochs=200)
+print(ann_syn_cm)
 print((ann_syn_cm[0][0] + ann_syn_cm[1][1]) / np.sum(ann_syn_cm))
 
 
 
 
 
-dt_syn_cm = run_dt(pd.concat([train_data, syn_data[:100]]), test_data)
+dt_syn_cm = run_dt(pd.concat([train_data, mwem_syn[:100]]), test_data)
 print((dt_syn_cm[0][0] + dt_syn_cm[1][1]) / np.sum(dt_syn_cm))
 
-knn_syn_cm = run_knn(pd.concat([train_data, syn_data[:100]]), test_data)
+knn_syn_cm = run_knn(pd.concat([train_data, mwem_syn[:100]]), test_data)
 print((knn_syn_cm[0][0] + knn_syn_cm[1][1]) / np.sum(knn_syn_cm))
 
-ann_syn_cm = run_ann(syn_data, pd.concat([train_data, test_data]), epochs=200)
+ann_syn_cm = run_ann(mwem_syn, pd.concat([train_data, test_data]), epochs=200)
 print((ann_syn_cm[0][0] + ann_syn_cm[1][1]) / np.sum(ann_syn_cm))
 
 
+gan = PytorchDPSynthesizer(4.5, PATECTGAN(regularization='dragan'), None)
+gan.fit(train_data, categorical_columns=train_data.columns.to_list())
+gan_syn = gan.sample(100000)
+gan_eq = equalize(gan_syn, 10000)
+knn_cm = run_knn(gan_eq, test_data)
+print(knn_cm)
+print((knn_cm[0][0] + knn_cm[1][1]) / np.sum(knn_cm))
+h = histogram_from_data_attributes(gan_eq)
+hist = h[0][0]
+mwem_syn = run_mwem(train_data, 100, 0.5, 100, starting_hist=hist)
+mwem_eq = equalize(mwem_syn, 10000)
+knn_cm = run_knn(mwem_eq, test_data)
+print(knn_cm)
+print((knn_cm[0][0] + knn_cm[1][1]) / np.sum(knn_cm))
