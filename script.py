@@ -103,22 +103,22 @@ def plot_history(history):
 
 dim = 12
 train_size = 40
-test_size = 60
-
+test_size = 1000
 class_vec = np.random.choice([0,1], dim-1)
-train_data = sample(train_size, dim, class_vec)
-test_data = sample(test_size, dim, class_vec)
+
+data = sample(train_size + test_size, dim, class_vec)
+train_data = data[:train_size]
+test_data = data[train_size:]
+
 plot_tsne(data)
 
-extra_data = sample(1000, dim, class_vec)
-plot_tsne(extra_data)
-
-ann_cm, history = run_ann(train_data, test_data, dim, epochs=150)
+ann_cm, history = run_ann(train_data, test_data, dim, epochs=100)
 plot_history(history)
 
+df = pd.DataFrame(train_data.astype(int))
 gan = PytorchDPSynthesizer(10.0, PATECTGAN(regularization='dragan'), None)
 gan.fit(df, categorical_columns=df.columns.to_list())
 gan_syn = gan.sample(10000)
 
-ann_cm, history = run_ann(gan_syn.to_numpy(), test_data, dim, epochs=150, batch_size=100)
-plot_history(history)
+gan_ann_cm, gan_history = run_ann(gan_syn.to_numpy(), test_data, dim, epochs=100, batch_size=100)
+plot_history(gan_history)
